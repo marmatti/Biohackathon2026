@@ -17,7 +17,7 @@ The simulator generates movies of fluorescent cell-like objects together with fi
 Each simulation run produces:
 - a **clean movie** before background and detector noise
 - a **noisy movie**
-- ordered **PNG frames**
+- ordered **TIF frames**
 - **movie-level labels**
 - **frame-level labels**
 
@@ -48,7 +48,7 @@ It does the following:
 3. determines the seed(s) to use
 4. runs one or multiple simulation jobs
 5. creates one output directory per run
-6. saves movies, PNG frames, and labels for each run
+6. saves movies, TIF frames, and labels for each run
 
 ### `run_sim.ipynb`
 Example notebook showing how to use `runner.py` to generate simulation outputs.

@@ -36,11 +36,11 @@ Filename for movie-level summary labels.
 ### `frame_labels_json_name`
 Filename for frame-level labels.
 
-### `noisy_png_dir`
-Directory for ordered noisy PNG frames.
+### `noisy_tif_dir`
+Directory for ordered noisy TIF frames.
 
-### `clean_png_dir`
-Directory for ordered clean PNG frames.
+### `clean_tif_dir`
+Directory for ordered clean TIF frames.
 
 ---
 
