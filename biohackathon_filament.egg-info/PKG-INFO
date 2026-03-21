@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: biohackathon-filament
+Version: 0.1.0
+Summary: Filament segmentation pipeline with SegmentTracker
+Requires-Python: >=3.8
+Requires-Dist: numpy>=1.21
+Requires-Dist: Pillow>=9.0
+Requires-Dist: matplotlib>=3.5
+Requires-Dist: scipy>=1.7
+Requires-Dist: scikit-image>=0.19
+Requires-Dist: pandas>=1.3
+Requires-Dist: imageio[ffmpeg]>=2.9
+Provides-Extra: segment-tracker
+Requires-Dist: imageio[ffmpeg]>=2.9; extra == "segment-tracker"
