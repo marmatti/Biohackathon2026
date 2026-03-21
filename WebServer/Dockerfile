@@ -4,7 +4,7 @@ FROM ubuntu:22.04
 # Stop interactive prompts from halting the build process
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1. Install necessary system dependencies (wget, python, and libraries for OpenCV)
+# 1. Install necessary system dependencies
 RUN apt-get update && apt-get install -y \
     wget \
     bzip2 \
@@ -15,7 +15,6 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Download and extract the official Linux Headless version of Ilastik
-# (We place it in the /opt/ directory, which is standard for add-on software)
 RUN wget https://files.ilastik.org/ilastik-1.4.0-Linux.tar.bz2 -O ilastik.tar.bz2 && \
     tar -xjf ilastik.tar.bz2 && \
     rm ilastik.tar.bz2 && \
@@ -23,15 +22,14 @@ RUN wget https://files.ilastik.org/ilastik-1.4.0-Linux.tar.bz2 -O ilastik.tar.bz
 
 # 3. Set up your Python environment
 WORKDIR /app
-RUN pip3 install opencv-python-headless
+RUN pip3 install opencv-python-headless streamlit pillow tifffile numpy imagecodecs
 
 # 4. Copy your specific files into the Docker container
 COPY filament_model_v1.ilp /app/
-COPY deploy.py /app/
+COPY app.py /app/
 
-# 5. Create directories where you will mount your images later
-RUN mkdir -p /app/data/input
-RUN mkdir -p /app/data/output
+# 5. Expose the default Streamlit port
+EXPOSE 8501
 
-# 6. Tell Docker what to do when the container starts
-CMD ["python3", "deploy.py"]
+# 6. Tell Docker to run the Streamlit app on startup
+CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0"]
