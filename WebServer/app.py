@@ -368,7 +368,7 @@ if processing_mode == "Single Image":
 
 else:
     # --- BATCH PROCESSING MODE ---
-    st.write("Process multiple images at once and explore the results dynamically.")
+    # st.write("Process multiple images at once and explore the results dynamically.")
     uploaded_files = st.file_uploader("Choose images...", type=["png", "jpg", "jpeg", "tif", "tiff"], accept_multiple_files=True)
     
     def process_single_batch_item(i, file_name, file_bytes, temp_dir, global_high, gamma, contrast_factor, bg_fraction, target_class, use_advanced):
@@ -551,21 +551,21 @@ else:
 
 
                         def compute_containment_boundary(pred_mask, gt_mask, dilation_px=3):
-                            from skimage.morphology import dilation, disk
+                            # from skimage.morphology import dilation, disk
                             pred = pred_mask.astype(bool)
                             gt   = gt_mask.astype(bool)
                             if pred.sum() == 0:
                                 return 1.0
-                            gt_dilated = dilation(gt.astype(np.uint8), disk(dilation_px)).astype(bool)
-                            return (pred & gt_dilated).sum() / pred.sum()
+                            # gt_dilated = dilation(gt.astype(np.uint8), disk(dilation_px)).astype(bool)
+                            return (pred & gt).sum() / pred.sum()
 
                             
                         bd = compute_containment_boundary(pred_mask, gt_mask)
-                        rows.append({"frame": frame_idx, "file": fname, "boundary_dice": bd})
+                        rows.append({"frame": frame_idx, "file": fname, "Prediction containment %": bd})
                     if rows:
-                        mean_bd = sum(r["boundary_dice"] for r in rows) / len(rows)
-                        st.metric("Mean Boundary Dice", f"{mean_bd:.4f}")
-                        st.table([{"Frame": r["frame"], "File": r["file"], "Boundary Dice": f"{r['boundary_dice']:.4f}"} for r in rows])
+                        mean_bd = sum(r["Prediction containment %"] for r in rows) / len(rows)
+                        st.metric("Mean Prediction containment %", f"{mean_bd:.4f}")
+                        st.table([{"Frame": r["frame"], "File": r["file"], "Prediction containment %": f"{r['Prediction containment %']:.4f}"} for r in rows])
                     else:
                         st.info("No frames matched. Upload images named like frame_000.tif to match JSON annotations.")
         
