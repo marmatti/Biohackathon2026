@@ -1,5 +1,7 @@
 # Install project (includes workflow.SegmentTracker): pip install -e .
 -e .
+# Use PyTorch CUDA wheels when available.
+--extra-index-url https://download.pytorch.org/whl/cu124
 
 numpy>=1.21
 Pillow>=9.0
@@ -8,3 +10,8 @@ scipy>=1.7
 scikit-image>=0.19
 pandas>=1.3
 imageio[ffmpeg]>=2.9
+imagecodecs
+sam2
+torch
+torchvision
+torchaudio
