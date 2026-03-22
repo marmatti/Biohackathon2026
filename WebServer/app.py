@@ -126,17 +126,21 @@ def run_ilastik_with_logs(command):
             raise subprocess.CalledProcessError(process.returncode, command, "".join(logs))
 
 # --- EVALUATION (Label Studio JSON + Boundary Dice) ---
-CROP6_IMAGE_RE = re.compile(r"URA7_URA8_002-crop6_frame_(\d+)\.png", re.IGNORECASE)
+# CROP6_IMAGE_RE = re.compile(r"URA7_URA8_002-crop6_frame_(\d+)\.png", re.IGNORECASE)
+# CROP6_IMAGE_RE = re.compile(r"frame_(\d+)", re.IGNORECASE)
+CROP6_IMAGE_RE = re.compile(r"_t(\d+)_", re.IGNORECASE)
 
 def _extract_frame_index(filename):
-    """Extract frame number from filename like frame_042.tif or frame_42.png."""
-    stem = Path(filename).stem.lower()
-    if not stem.startswith("frame_"):
-        return None
-    try:
-        return int(stem.split("_", 1)[1])
-    except (IndexError, ValueError):
-        return None
+    match = CROP6_IMAGE_RE.search(str(filename))
+    return int(match.group(1)) if match else None
+#     """Extract frame number from filename like frame_042.tif or frame_42.png."""
+#     stem = Path(filename).stem.lower()
+#     if not stem.startswith("frame_"):
+#         return None
+#     try:
+#         return int(stem.split("_", 1)[1])
+#     except (IndexError, ValueError):
+#         return None
 
 def _extract_crop6_frame_index(image_field):
     """Extract frame number from Label Studio image field e.g. URA7_URA8_002-crop6_frame_42.png."""
@@ -276,7 +280,7 @@ else:
 # st.sidebar.markdown("---")
 st.sidebar.subheader("Mask Tuning (Outputs)")
 # st.sidebar.caption("Updates dynamically without re-running.")
-target_class = st.sidebar.number_input("Target Class Channel", min_value=0, max_value=5, value=1, step=1)
+target_class = st.sidebar.number_input("Target Class Channel", min_value=0, max_value=1, value=0, step=1)
 confidence_threshold = st.sidebar.slider("Confidence Threshold", min_value=0.0, max_value=1.0, value=0.50, step=0.05)
 opacity = st.sidebar.slider("Probability Overlay Opacity", min_value=0.0, max_value=1.0, value=0.6, step=0.05)
 keep_largest = st.sidebar.checkbox("Keep Only Largest Region", value=True)
