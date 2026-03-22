@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw
 from pathlib import Path
 import concurrent.futures
 from skimage import morphology
+from skimage.measure import label, regionprops
 
 # Paths inside the Docker container
 ILASTIK_EXE = "/opt/ilastik/run_ilastik.sh"
@@ -35,6 +36,14 @@ class MorphologicalSegmenter:
         mask = morphology.binary_opening(mask, se_open).astype(np.uint8)
         mask = morphology.binary_closing(mask, se_close).astype(np.uint8)
         return mask
+
+def largest_region(mask):
+    labeled = label(mask)
+    props   = regionprops(labeled)
+    if not props:
+        return np.zeros_like(mask)
+    largest = max(props, key=lambda p: p.area)
+    return (labeled == largest.label).astype(mask.dtype)
 
 # --- HELPER FUNCTIONS ---
 def save_compatible_input(file_buffer, output_path):
@@ -246,6 +255,7 @@ st.sidebar.subheader("Mask Tuning (Outputs)")
 target_class = st.sidebar.number_input("Target Class Channel", min_value=0, max_value=5, value=1, step=1)
 confidence_threshold = st.sidebar.slider("Confidence Threshold", min_value=0.0, max_value=1.0, value=0.50, step=0.05)
 opacity = st.sidebar.slider("Probability Overlay Opacity", min_value=0.0, max_value=1.0, value=0.6, step=0.05)
+keep_largest = st.sidebar.checkbox("Keep Only Largest Region", value=False)
 
 # --- INITIALIZE SESSION STATE ---
 for key in ['single_processed', 'single_data', 'batch_processed', 'batch_data', 'batch_zip']:
@@ -324,12 +334,17 @@ if processing_mode == "Single Image":
             data = st.session_state.single_data
             raw_prob, orig_img = data["raw_prob"], data["orig_img"]
             
-            total_pixels = raw_prob.size
-            confident_pixels = np.count_nonzero(raw_prob >= confidence_threshold)
-            area_pct = (confident_pixels / total_pixels) * 100
-
             thresholded_prob = np.where(raw_prob >= confidence_threshold, raw_prob, 0.0)
             prob_8bit = (thresholded_prob * 255).astype(np.uint8)
+            
+            if keep_largest:
+                active_mask = (prob_8bit > 0).astype(np.uint8)
+                prob_8bit = (prob_8bit * largest_region(active_mask)).astype(np.uint8)
+                
+            total_pixels = raw_prob.size
+            confident_pixels = np.count_nonzero(prob_8bit > 0)
+            area_pct = (confident_pixels / total_pixels) * 100
+
             prob_mask_img = Image.fromarray(prob_8bit, mode='L')
             
             blended_img = create_prob_overlay(orig_img, prob_mask_img, opacity)
@@ -486,12 +501,17 @@ else:
             data = st.session_state.batch_data[selected_image]
             raw_prob, orig_img = data["raw_prob"], data["orig_img"]
             
-            total_pixels = raw_prob.size
-            confident_pixels = np.count_nonzero(raw_prob >= confidence_threshold)
-            area_pct = (confident_pixels / total_pixels) * 100
-
             thresholded_prob = np.where(raw_prob >= confidence_threshold, raw_prob, 0.0)
             prob_8bit = (thresholded_prob * 255).astype(np.uint8)
+            
+            if keep_largest:
+                active_mask = (prob_8bit > 0).astype(np.uint8)
+                prob_8bit = (prob_8bit * largest_region(active_mask)).astype(np.uint8)
+                
+            total_pixels = raw_prob.size
+            confident_pixels = np.count_nonzero(prob_8bit > 0)
+            area_pct = (confident_pixels / total_pixels) * 100
+
             prob_mask_img = Image.fromarray(prob_8bit, mode='L')
             
             blended_img = create_prob_overlay(orig_img, prob_mask_img, opacity)
@@ -526,6 +546,8 @@ else:
                         h, w = raw_prob.shape[0], raw_prob.shape[1]
                         gt_mask = _rasterize_polygons_to_mask(ann["polygons"], h, w)
                         pred_mask = (raw_prob >= confidence_threshold).astype(np.uint8)
+                        if keep_largest:
+                            pred_mask = largest_region(pred_mask).astype(np.uint8)
                         bd = compute_boundary_dice(pred_mask, gt_mask)
                         rows.append({"frame": frame_idx, "file": fname, "boundary_dice": bd})
                     if rows:
