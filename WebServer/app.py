@@ -85,6 +85,30 @@ def create_prob_overlay(original, prob_mask_8bit, opacity):
     overlay_color.putalpha(alpha_mask)
     return Image.alpha_composite(base, overlay_color)
 
+def create_eval_overlay(original, pred_mask_8bit, gt_mask_8bit, opacity):
+    base = prepare_for_display(original).convert("RGBA")
+    
+    pred_color = Image.new("RGBA", base.size, (255, 0, 0, 255))
+    gt_color = Image.new("RGBA", base.size, (0, 255, 0, 255))
+    
+    if pred_mask_8bit.size != base.size:
+        pred_mask_8bit = pred_mask_8bit.resize(base.size, Image.NEAREST)
+    if gt_mask_8bit.size != base.size:
+        gt_mask_8bit = gt_mask_8bit.resize(base.size, Image.NEAREST)
+        
+    pred_array = np.array(pred_mask_8bit)
+    pred_alpha = (pred_array * opacity).astype(np.uint8)
+    pred_color.putalpha(Image.fromarray(pred_alpha, mode='L'))
+    
+    gt_array = np.array(gt_mask_8bit)
+    gt_alpha = (gt_array * opacity).astype(np.uint8)
+    gt_color.putalpha(Image.fromarray(gt_alpha, mode='L'))
+    
+    blended = Image.alpha_composite(base, gt_color)
+    blended = Image.alpha_composite(blended, pred_color)
+    
+    return blended
+
 def run_ilastik_with_logs(command):
     with st.expander("Live Debug Logs (Ilastik Engine)", expanded=True):
         log_box = st.empty()
@@ -561,11 +585,22 @@ else:
 
                             
                         bd = compute_containment_boundary(pred_mask, gt_mask)
-                        rows.append({"frame": frame_idx, "file": fname, "Prediction containment %": bd})
+                        
+                        orig_img = data["orig_img"]
+                        pred_mask_img = Image.fromarray((pred_mask * 255).astype(np.uint8), mode='L')
+                        gt_mask_img = Image.fromarray(gt_mask, mode='L')
+                        eval_overlay = create_eval_overlay(orig_img, pred_mask_img, gt_mask_img, opacity)
+                        
+                        rows.append({"frame": frame_idx, "file": fname, "Prediction containment %": bd, "eval_overlay": eval_overlay})
                     if rows:
                         mean_bd = sum(r["Prediction containment %"] for r in rows) / len(rows)
                         st.metric("Mean Prediction containment %", f"{mean_bd:.4f}")
                         st.table([{"Frame": r["frame"], "File": r["file"], "Prediction containment %": f"{r['Prediction containment %']:.4f}"} for r in rows])
+                        
+                        st.subheader("Evaluation Overlays (Red: Prediction, Green: Truth)")
+                        for r in rows:
+                            st.write(f"**File: {r['file']}** (Containment: {r['Prediction containment %']:.4f})")
+                            st.image(r["eval_overlay"], use_container_width=True)
                     else:
                         st.info("No frames matched. Upload images named like frame_000.tif to match JSON annotations.")
         
