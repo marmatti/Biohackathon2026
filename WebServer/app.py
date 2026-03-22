@@ -255,7 +255,7 @@ st.sidebar.subheader("Mask Tuning (Outputs)")
 target_class = st.sidebar.number_input("Target Class Channel", min_value=0, max_value=5, value=1, step=1)
 confidence_threshold = st.sidebar.slider("Confidence Threshold", min_value=0.0, max_value=1.0, value=0.50, step=0.05)
 opacity = st.sidebar.slider("Probability Overlay Opacity", min_value=0.0, max_value=1.0, value=0.6, step=0.05)
-keep_largest = st.sidebar.checkbox("Keep Only Largest Region", value=False)
+keep_largest = st.sidebar.checkbox("Keep Only Largest Region", value=True)
 
 # --- INITIALIZE SESSION STATE ---
 for key in ['single_processed', 'single_data', 'batch_processed', 'batch_data', 'batch_zip']:
