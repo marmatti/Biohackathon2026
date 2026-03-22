@@ -1,0 +1,12 @@
+data/
+results_training_using_positive/
+ryan_base/
+test_data/*
+!test_data/
+!test_data/marco_new*/
+!test_data/marco_new*/**
+yolo_results/
+results/*
+!results/
+!results/marco_new*/
+!results/marco_new*/**
