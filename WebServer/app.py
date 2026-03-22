@@ -1,13 +1,17 @@
 import streamlit as st
 import subprocess
 import os
+import re
+import json
 import tempfile
 import zipfile
 import io
 import tifffile
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
+from pathlib import Path
 import concurrent.futures
+from skimage import morphology
 
 # Paths inside the Docker container
 ILASTIK_EXE = "/opt/ilastik/run_ilastik.sh"
@@ -15,7 +19,44 @@ PROJECT_FILE = "/app/filament_model_v1.ilp"
 
 st.set_page_config(page_title="Filament Probabilities", layout="wide")
 
+class MorphologicalSegmenter:
+    """Threshold + opening/closing for filament detection."""
+    def __init__(self, threshold_percentile=98, open_radius=1, close_radius=1):
+        self.threshold_percentile = threshold_percentile
+        self.open_radius = open_radius
+        self.close_radius = close_radius
+
+    def segment(self, image):
+        img = np.asarray(image, dtype=np.float64)
+        thresh = np.percentile(img, self.threshold_percentile)
+        mask = (img >= thresh).astype(np.uint8)
+        se_open = morphology.disk(self.open_radius)
+        se_close = morphology.disk(self.close_radius)
+        mask = morphology.binary_opening(mask, se_open).astype(np.uint8)
+        mask = morphology.binary_closing(mask, se_close).astype(np.uint8)
+        return mask
+
 # --- HELPER FUNCTIONS ---
+def save_compatible_input(file_buffer, output_path):
+    """
+    Reads the uploaded file, ensures it has a 'Channel' dimension for Ilastik, 
+    and saves it to the temporary directory.
+    """
+    try:
+        file_buffer.seek(0)
+        img_array = tifffile.imread(file_buffer)
+        if img_array.ndim == 2:
+            img_array = np.expand_dims(img_array, axis=-1)
+            tifffile.imwrite(output_path, img_array)
+        else:
+            file_buffer.seek(0)
+            with open(output_path, "wb") as f:
+                f.write(file_buffer.read())
+    except Exception:
+        file_buffer.seek(0)
+        with open(output_path, "wb") as f:
+            f.write(file_buffer.read())
+
 def prepare_for_display(img):
     if img.mode in ("I", "I;16", "F"):
         return img.point(lambda i: i * (1./256)).convert('RGB')
@@ -51,7 +92,83 @@ def run_ilastik_with_logs(command):
             st.error(f"Ilastik failed with exit code {process.returncode}")
             raise subprocess.CalledProcessError(process.returncode, command, "".join(logs))
 
-# --- NEW: TIFF TO PNG PRE-PROCESSING FUNCTIONS ---
+# --- EVALUATION (Label Studio JSON + Boundary Dice) ---
+CROP6_IMAGE_RE = re.compile(r"URA7_URA8_002-crop6_frame_(\d+)\.png", re.IGNORECASE)
+
+def _extract_frame_index(filename):
+    """Extract frame number from filename like frame_042.tif or frame_42.png."""
+    stem = Path(filename).stem.lower()
+    if not stem.startswith("frame_"):
+        return None
+    try:
+        return int(stem.split("_", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+def _extract_crop6_frame_index(image_field):
+    """Extract frame number from Label Studio image field e.g. URA7_URA8_002-crop6_frame_42.png."""
+    match = CROP6_IMAGE_RE.search(str(image_field))
+    return int(match.group(1)) if match else None
+
+def _extract_polygons(task):
+    polygons = []
+    for ann in task.get("annotations", []):
+        for result in ann.get("result", []):
+            if result.get("type") != "polygonlabels":
+                continue
+            value = result.get("value", {})
+            if not isinstance(value, dict):
+                continue
+            points = value.get("points", [])
+            if points:
+                polygons.append(points)
+    return polygons
+
+def _build_frame_to_annotations(export_json_bytes):
+    """Parse Label Studio JSON and return {frame_index: {"polygons": [...]}}."""
+    try:
+        tasks = json.loads(export_json_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    frame_to_ann = {}
+    for task in tasks:
+        image_field = str(task.get("data", {}).get("image", ""))
+        idx = _extract_crop6_frame_index(image_field)
+        if idx is None:
+            continue
+        frame_to_ann[idx] = {"polygons": _extract_polygons(task)}
+    return frame_to_ann
+
+def _rasterize_polygons_to_mask(polygons_pct, height, width):
+    """Rasterize percentage polygons to binary mask (H, W) uint8."""
+    mask_img = Image.new("L", (width, height), 0)
+    if not polygons_pct:
+        return np.array(mask_img, dtype=np.uint8)
+    draw = ImageDraw.Draw(mask_img)
+    for polygon in polygons_pct:
+        px = [(float(x) * width / 100.0, float(y) * height / 100.0) for x, y in polygon]
+        if len(px) >= 3:
+            draw.polygon(px, fill=255, outline=255)
+    return np.array(mask_img, dtype=np.uint8)
+
+def compute_boundary_dice(pred_mask, gt_mask, width=2):
+    """Boundary Dice: robust to boundary artefacts. Uses dilated boundaries."""
+    from skimage.segmentation import find_boundaries
+    from skimage.morphology import dilation, disk
+    pred = pred_mask.astype(bool)
+    gt = gt_mask.astype(bool)
+    pb = find_boundaries(pred, mode="inner")
+    gb = find_boundaries(gt, mode="inner")
+    if pb.sum() == 0 and gb.sum() == 0:
+        return 1.0
+    selem = disk(width)
+    pb_d = dilation(pb.astype(np.uint8), selem).astype(bool)
+    gb_d = dilation(gb.astype(np.uint8), selem).astype(bool)
+    inter = (pb_d & gb_d).sum()
+    total = pb_d.sum() + gb_d.sum()
+    return 2.0 * inter / total if total > 0 else 0.0
+
+# --- PRE-PROCESSING FUNCTIONS ---
 def get_global_high(uploaded_files, percentile, max_workers=4):
     """Scans all uploaded TIFF files to find the global high percentile."""
     def process_file(file_bytes):
@@ -102,7 +219,6 @@ def preprocess_tiff_to_png(file_buffer, global_high, gamma, contrast_factor, bg_
     
     return Image.fromarray(norm_16bit)
 
-
 # --- SIDEBAR CONTROLS ---
 st.sidebar.title("Settings")
 processing_mode = st.sidebar.radio("Processing Mode", ["Single Image", "Batch Processing"])
@@ -114,61 +230,62 @@ st.sidebar.markdown("---")
 
 st.sidebar.subheader("1. Pre-Processing (Inputs)")
 st.sidebar.caption("Adjusting these requires re-running the extraction.")
-percentile_high = st.sidebar.number_input("High Percentile", value=99.99, step=0.01)
-gamma = st.sidebar.slider("Gamma", 0.5, 3.0, 1.2, 0.1)
-contrast_factor = st.sidebar.slider("Contrast Factor", 0.1, 1.5, 0.8, 0.1)
-bg_fraction = st.sidebar.number_input("Background Fraction", value=0.0625, format="%.4f") # 1/16
+use_advanced_normalization = st.sidebar.checkbox("Use Advanced TIFF Normalization (Requires Math Processing)", value=True)
+
+if use_advanced_normalization:
+    percentile_high = st.sidebar.number_input("High Percentile", value=99.99, step=0.01)
+    gamma = st.sidebar.slider("Gamma", 0.5, 3.0, 1.2, 0.1)
+    contrast_factor = st.sidebar.slider("Contrast Factor", 0.1, 1.5, 0.8, 0.1)
+    bg_fraction = st.sidebar.number_input("Background Fraction", value=0.0625, format="%.4f")
+else:
+    percentile_high, gamma, contrast_factor, bg_fraction = 99.99, 1.2, 0.8, 0.0625
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("2. Mask Tuning (Outputs)")
 st.sidebar.caption("Updates dynamically without re-running.")
-target_class = st.sidebar.number_input("Target Class Channel", min_value=0, max_value=5, value=0, step=1)
+target_class = st.sidebar.number_input("Target Class Channel", min_value=0, max_value=5, value=1, step=1)
 confidence_threshold = st.sidebar.slider("Confidence Threshold", min_value=0.0, max_value=1.0, value=0.50, step=0.05)
 opacity = st.sidebar.slider("Probability Overlay Opacity", min_value=0.0, max_value=1.0, value=0.6, step=0.05)
-
 
 # --- INITIALIZE SESSION STATE ---
 for key in ['single_processed', 'single_data', 'batch_processed', 'batch_data', 'batch_zip']:
     if key not in st.session_state:
         st.session_state[key] = False if 'processed' in key else ({} if 'data' in key else None)
 
-
 # --- MAIN APP UI ---
 st.title("Filament Probability App")
 
 if processing_mode == "Single Image":
     st.write("Extract and tune continuous probability maps using Ilastik.")
-    uploaded_file = st.file_uploader("Choose a raw .tiff image...", type=["tif", "tiff"], accept_multiple_files=False)
+    uploaded_file = st.file_uploader("Choose an image...", type=["png", "jpg", "jpeg", "tif", "tiff"], accept_multiple_files=False)
     
     if uploaded_file is not None and ('current_single_file' not in st.session_state or st.session_state.current_single_file != uploaded_file.name):
         st.session_state.single_processed = False
         st.session_state.current_single_file = uploaded_file.name
 
     if uploaded_file is not None:
+        original_img = Image.open(uploaded_file)
         
         # Display the RAW image as a preview
         if not st.session_state.single_processed:
-            st.subheader("Raw TIFF Preview")
-            raw_preview = tifffile.imread(uploaded_file)
-            if raw_preview.ndim > 2: raw_preview = raw_preview[0]
-            st.image(prepare_for_display(Image.fromarray(raw_preview)), use_container_width=True)
+            st.subheader("Preview")
+            st.image(prepare_for_display(original_img), use_container_width=True)
 
-            if st.button("Pre-process & Run Extraction", type="primary"):
-                with st.spinner("Processing..."):
+            if st.button("Run Probability Extraction", type="primary"):
+                with st.spinner("Initializing Ilastik..."):
                     with tempfile.TemporaryDirectory() as temp_dir:
                         
-                        # 1. Math: Get local high percentile for this single image
-                        local_high = get_global_high([uploaded_file], percentile_high)
-                        
-                        # 2. Pre-process the TIFF into the 16-bit PNG your model expects
-                        processed_png = preprocess_tiff_to_png(uploaded_file, local_high, gamma, contrast_factor, bg_fraction)
-                        
-                        # 3. Save it to the temp folder
-                        input_filename = "input_img.png"
-                        input_path = os.path.join(temp_dir, input_filename)
-                        processed_png.save(input_path)
+                        if use_advanced_normalization:
+                            local_high = get_global_high([uploaded_file], percentile_high)
+                            processed_png = preprocess_tiff_to_png(uploaded_file, local_high, gamma, contrast_factor, bg_fraction)
+                            input_filename = "input_img.png"
+                            input_path = os.path.join(temp_dir, input_filename)
+                            processed_png.save(input_path)
+                        else:
+                            input_filename = f"input_img{os.path.splitext(uploaded_file.name)[1]}"
+                            input_path = os.path.join(temp_dir, input_filename)
+                            save_compatible_input(uploaded_file, input_path)
 
-                        # 4. Run Ilastik on the newly minted PNG
                         command = [
                             ILASTIK_EXE, "--headless", f"--project={PROJECT_FILE}",
                             "--export_source=Probabilities", "--output_format=tiff",
@@ -178,7 +295,7 @@ if processing_mode == "Single Image":
 
                         try:
                             run_ilastik_with_logs(command)
-                            expected_output_path = os.path.join(temp_dir, "input_img_prob.tiff")
+                            expected_output_path = os.path.join(temp_dir, f"{os.path.splitext(input_filename)[0]}_prob.tiff")
                             
                             if os.path.exists(expected_output_path):
                                 prob_img = tifffile.imread(expected_output_path)
@@ -192,7 +309,7 @@ if processing_mode == "Single Image":
 
                                 st.session_state.single_data = {
                                     "raw_prob": prob_channel,
-                                    "orig_img": processed_png, # Overlay onto the processed PNG, not raw
+                                    "orig_img": processed_png if use_advanced_normalization else original_img,
                                     "tiff_bytes": tiff_bytes
                                 }
                                 st.session_state.single_processed = True
@@ -229,25 +346,30 @@ if processing_mode == "Single Image":
                 st.subheader("Confidence Overlay")
                 st.image(blended_img, use_container_width=True)
                 
-            st.download_button("Download Raw TIFF", data=data["tiff_bytes"], file_name="single_prob.tiff", mime="image/tiff")
+            st.download_button("Download Raw TIFF", data=data["tiff_bytes"], file_name=f"{os.path.splitext(uploaded_file.name)[0]}_prob.tiff", mime="image/tiff")
             if st.button("Start Over"):
                 st.session_state.single_processed = False
                 st.rerun()
 
 else:
     # --- BATCH PROCESSING MODE ---
-    st.write("Process multiple raw images at once and explore the results dynamically.")
-    uploaded_files = st.file_uploader("Choose raw .tiff images...", type=["tif", "tiff"], accept_multiple_files=True)
+    st.write("Process multiple images at once and explore the results dynamically.")
+    uploaded_files = st.file_uploader("Choose images...", type=["png", "jpg", "jpeg", "tif", "tiff"], accept_multiple_files=True)
     
-    def process_single_batch_item(i, file_name, file_bytes, temp_dir, global_high, gamma, contrast_factor, bg_fraction, target_class):
+    def process_single_batch_item(i, file_name, file_bytes, temp_dir, global_high, gamma, contrast_factor, bg_fraction, target_class, use_advanced):
         try:
-            # 1. Preprocess
-            processed_png = preprocess_tiff_to_png(io.BytesIO(file_bytes), global_high, gamma, contrast_factor, bg_fraction)
-            input_path = os.path.join(temp_dir, f"img_{i}.png")
-            processed_png.save(input_path)
+            ext = os.path.splitext(file_name)[1]
+            if use_advanced:
+                processed_png = preprocess_tiff_to_png(io.BytesIO(file_bytes), global_high, gamma, contrast_factor, bg_fraction)
+                input_path = os.path.join(temp_dir, f"img_{i}.png")
+                processed_png.save(input_path)
+            else:
+                input_path = os.path.join(temp_dir, f"img_{i}{ext}")
+                save_compatible_input(io.BytesIO(file_bytes), input_path)
             
-            # 2. Ilastik
-            prob_path = os.path.join(temp_dir, f"img_{i}_prob.tiff")
+            # Ilastik runs on generated input
+            input_filename = os.path.basename(input_path)
+            prob_path = os.path.join(temp_dir, f"{os.path.splitext(input_filename)[0]}_prob.tiff")
             command = [
                 ILASTIK_EXE, "--headless", f"--project={PROJECT_FILE}",
                 "--export_source=Probabilities", "--output_format=tiff",
@@ -258,7 +380,7 @@ else:
             if process.returncode != 0:
                 return file_name, False, process.stdout
             
-            # 3. Postprocess
+            # Postprocess
             if os.path.exists(prob_path):
                 prob_img = tifffile.imread(prob_path)
                 if prob_img.ndim == 3:
@@ -266,8 +388,12 @@ else:
                 else:
                     prob_channel = prob_img
                 
-                orig_img = Image.open(input_path)
-                orig_img.load()
+                # We need to open the image using BytesIO to create a PIL Image safely independently
+                if use_advanced:
+                    orig_img = Image.open(input_path).copy()
+                else:
+                    orig_img = Image.open(io.BytesIO(file_bytes)).copy()
+                
                 with open(prob_path, "rb") as f:
                     prob_bytes = f.read()
                     
@@ -289,12 +415,14 @@ else:
 
     if uploaded_files and not st.session_state.batch_processed:
         if st.button("Run Batch Processing", type="primary"):
-            with st.spinner(f"Processing {len(uploaded_files)} images..."):
+            with st.spinner(f"Processing {len(uploaded_files)} images in parallel..."):
                 with tempfile.TemporaryDirectory() as temp_dir:
                     
-                    # 1. Calculate the TRUE global high across all uploaded files
-                    st.toast("Scanning files to find Global High Percentile...")
-                    global_high = get_global_high(uploaded_files, percentile_high, max_workers)
+                    if use_advanced_normalization:
+                        st.toast("Scanning files to find Global High Percentile...")
+                        global_high = get_global_high(uploaded_files, percentile_high, max_workers)
+                    else:
+                        global_high = 1.0
                     
                     batch_results = {}
                     zip_buffer = io.BytesIO()
@@ -309,7 +437,7 @@ else:
                             futures.append(executor.submit(
                                 process_single_batch_item, 
                                 i, f.name, f.getvalue(), temp_dir, 
-                                global_high, gamma, contrast_factor, bg_fraction, target_class
+                                global_high, gamma, contrast_factor, bg_fraction, target_class, use_advanced_normalization
                             ))
                         
                         completed = 0
@@ -331,27 +459,10 @@ else:
                                     
                     if errors:
                         for fname, err in errors:
-                            st.error(f"Failed to process {fname}: \\n{err}")
+                            st.error(f"Failed to process {fname}: \n{err}")
 
                     st.session_state.batch_data = batch_results
-                    st.session_state.batch_zip = zip_buffer.getvalue()from skimage import morphology
-
-class MorphologicalSegmenter:
-    """Threshold + opening/closing for filament detection."""
-    def __init__(self, threshold_percentile=98, open_radius=1, close_radius=1):
-        self.threshold_percentile = threshold_percentile
-        self.open_radius = open_radius
-        self.close_radius = close_radius
-
-    def segment(self, image):
-        img = np.asarray(image, dtype=np.float64)
-        thresh = np.percentile(img, self.threshold_percentile)
-        mask = (img >= thresh).astype(np.uint8)
-        se_open = morphology.disk(self.open_radius)
-        se_close = morphology.disk(self.close_radius)
-        mask = morphology.binary_opening(mask, se_open).astype(np.uint8)
-        mask = morphology.binary_closing(mask, se_close).astype(np.uint8)
-        return mask
+                    st.session_state.batch_zip = zip_buffer.getvalue()
                     st.session_state.batch_processed = True
                     st.rerun()
 
@@ -391,6 +502,38 @@ class MorphologicalSegmenter:
                 st.image(prob_mask_img, use_container_width=True, caption="Probability Heatmap")
             with col2:
                 st.image(blended_img, use_container_width=True, caption="Confidence Overlay")
+
+        # --- Evaluation (Label Studio JSON) ---
+        st.markdown("---")
+        with st.expander("Evaluation (optional): compare Ilastik to ground truth"):
+            st.caption("Upload a Label Studio export JSON with polygon annotations (e.g. URA7_URA8_002-crop6_frame_N.png). Frames are matched by frame index (e.g. frame_042.tif).")
+            gt_json = st.file_uploader("Ground truth (Label Studio JSON)", type=["json"], key="eval_gt_json")
+            if gt_json is not None and st.button("Run Evaluation", key="run_eval"):
+                gt_bytes = gt_json.read()
+                frame_to_ann = _build_frame_to_annotations(gt_bytes)
+                if not frame_to_ann:
+                    st.warning("No annotated frames found in the JSON. Expect image field like URA7_URA8_002-crop6_frame_N.png.")
+                else:
+                    rows = []
+                    for fname, data in st.session_state.batch_data.items():
+                        frame_idx = _extract_frame_index(fname)
+                        if frame_idx is None:
+                            continue
+                        ann = frame_to_ann.get(frame_idx)
+                        if ann is None:
+                            continue
+                        raw_prob = data["raw_prob"]
+                        h, w = raw_prob.shape[0], raw_prob.shape[1]
+                        gt_mask = _rasterize_polygons_to_mask(ann["polygons"], h, w)
+                        pred_mask = (raw_prob >= confidence_threshold).astype(np.uint8)
+                        bd = compute_boundary_dice(pred_mask, gt_mask)
+                        rows.append({"frame": frame_idx, "file": fname, "boundary_dice": bd})
+                    if rows:
+                        mean_bd = sum(r["boundary_dice"] for r in rows) / len(rows)
+                        st.metric("Mean Boundary Dice", f"{mean_bd:.4f}")
+                        st.table([{"Frame": r["frame"], "File": r["file"], "Boundary Dice": f"{r['boundary_dice']:.4f}"} for r in rows])
+                    else:
+                        st.info("No frames matched. Upload images named like frame_000.tif to match JSON annotations.")
         
         if st.button("Clear Batch & Start Over"):
             st.session_state.batch_processed = False

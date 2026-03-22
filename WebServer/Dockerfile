@@ -22,7 +22,7 @@ RUN wget https://files.ilastik.org/ilastik-1.4.0-Linux.tar.bz2 -O ilastik.tar.bz
 
 # 3. Set up your Python environment
 WORKDIR /app
-RUN pip3 install opencv-python-headless streamlit pillow tifffile numpy imagecodecs
+RUN pip3 install opencv-python-headless streamlit pillow tifffile numpy imagecodecs scikit-image
 
 # 4. Copy your specific files into the Docker container
 COPY filament_model_v1.ilp /app/
