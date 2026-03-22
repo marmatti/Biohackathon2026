@@ -334,7 +334,24 @@ else:
                             st.error(f"Failed to process {fname}: \\n{err}")
 
                     st.session_state.batch_data = batch_results
-                    st.session_state.batch_zip = zip_buffer.getvalue()
+                    st.session_state.batch_zip = zip_buffer.getvalue()from skimage import morphology
+
+class MorphologicalSegmenter:
+    """Threshold + opening/closing for filament detection."""
+    def __init__(self, threshold_percentile=98, open_radius=1, close_radius=1):
+        self.threshold_percentile = threshold_percentile
+        self.open_radius = open_radius
+        self.close_radius = close_radius
+
+    def segment(self, image):
+        img = np.asarray(image, dtype=np.float64)
+        thresh = np.percentile(img, self.threshold_percentile)
+        mask = (img >= thresh).astype(np.uint8)
+        se_open = morphology.disk(self.open_radius)
+        se_close = morphology.disk(self.close_radius)
+        mask = morphology.binary_opening(mask, se_open).astype(np.uint8)
+        mask = morphology.binary_closing(mask, se_close).astype(np.uint8)
+        return mask
                     st.session_state.batch_processed = True
                     st.rerun()
 
