@@ -1,0 +1,54 @@
+seed: 42
+
+movie:
+  n_frames: 50
+  height: 128
+  width: 128
+  
+output:
+  movie_npy_name: "movie.npy"
+  clean_movie_npy_name: "clean_movie.npy"
+  movie_labels_json_name: "movie_labels.json"
+  frame_labels_json_name: "frame_labels.json"
+  noisy_tiff_dir: "noisy_tiff_frames"
+  clean_tiff_dir: "clean_tiff_frames"
+
+cells:
+  n_cells: 2
+  mother_radius_px_range: [12.0, 25.0]
+  bud_probability: 0.3
+  bud_radius_ratio_range: [0.5, 1]
+  ellipticity_ratio_range: [0.9, 1.1]
+  intensity_range: [40.0, 80.0]
+  edge_softness_px_range: [4, 7]
+  placement_margin_px_range: [10.0, 20.0]
+  min_center_distance_scale_range: [0.80, 1.20]
+
+filament_event:
+  probability_any_filament: 1.00
+  total_duration_fraction_range: [0.70, 0.80]
+  
+filament:
+  length_px_range: [18.0, 28.0]
+  radius_px_range: [1, 2]
+  intensity_mean: 800.0
+  intensity_std: 100.0
+  z_center_range_px: [-0.5, 0.5]
+  rotation_sigma_deg_per_frame: 10.0
+  translation_sigma_xyz_px: [0.8, 0.8, 0.2]
+  n_centerline_points: 41
+  bend_count_range: [0, 3]
+  curvature_amplitude_px_range: [0.0, 3.5]
+  curvature_drift_sigma_px: 0.1
+  
+optics:
+  psf_sigma_xy_px: 1.2
+  defocus_sigma_z_px: 2.5
+
+noise:
+  background_offset: 15.0
+  background_gradient_max: 5.0
+  poisson_scale: 1.0
+  gaussian_read_sigma: 4.0
+  clip_min: 0.0
+  clip_max: 65535.0
