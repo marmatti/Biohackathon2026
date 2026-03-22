@@ -228,21 +228,21 @@ else:
     max_workers = 1
 st.sidebar.markdown("---")
 
-st.sidebar.subheader("1. Pre-Processing (Inputs)")
-st.sidebar.caption("Adjusting these requires re-running the extraction.")
-use_advanced_normalization = st.sidebar.checkbox("Use Advanced TIFF Normalization (Requires Math Processing)", value=True)
+# st.sidebar.subheader("1. Pre-Processing (Inputs)")
+# st.sidebar.caption("Adjusting these requires re-running the extraction.")
+use_advanced_normalization = True #st.sidebar.checkbox("Use Advanced TIFF Normalization (Requires Math Processing)", value=True)
 
 if use_advanced_normalization:
-    percentile_high = st.sidebar.number_input("High Percentile", value=99.99, step=0.01)
-    gamma = st.sidebar.slider("Gamma", 0.5, 3.0, 1.2, 0.1)
-    contrast_factor = st.sidebar.slider("Contrast Factor", 0.1, 1.5, 0.8, 0.1)
-    bg_fraction = st.sidebar.number_input("Background Fraction", value=0.0625, format="%.4f")
+    percentile_high = 99.99# st.sidebar.number_input("High Percentile", value=99.99, step=0.01)
+    gamma = 1.2#st.sidebar.slider("Gamma", 0.5, 3.0, 1.2, 0.1)
+    contrast_factor = 0.8#st.sidebar.slider("Contrast Factor", 0.1, 1.5, 0.8, 0.1)
+    bg_fraction = 0.0625#st.sidebar.number_input("Background Fraction", value=0.0625, format="%.4f")
 else:
     percentile_high, gamma, contrast_factor, bg_fraction = 99.99, 1.2, 0.8, 0.0625
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("2. Mask Tuning (Outputs)")
-st.sidebar.caption("Updates dynamically without re-running.")
+# st.sidebar.markdown("---")
+st.sidebar.subheader("Mask Tuning (Outputs)")
+# st.sidebar.caption("Updates dynamically without re-running.")
 target_class = st.sidebar.number_input("Target Class Channel", min_value=0, max_value=5, value=1, step=1)
 confidence_threshold = st.sidebar.slider("Confidence Threshold", min_value=0.0, max_value=1.0, value=0.50, step=0.05)
 opacity = st.sidebar.slider("Probability Overlay Opacity", min_value=0.0, max_value=1.0, value=0.6, step=0.05)
