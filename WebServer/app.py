@@ -548,7 +548,19 @@ else:
                         pred_mask = (raw_prob >= confidence_threshold).astype(np.uint8)
                         if keep_largest:
                             pred_mask = largest_region(pred_mask).astype(np.uint8)
-                        bd = compute_boundary_dice(pred_mask, gt_mask)
+
+
+                        def compute_containment_boundary(pred_mask, gt_mask, dilation_px=3):
+                            from skimage.morphology import dilation, disk
+                            pred = pred_mask.astype(bool)
+                            gt   = gt_mask.astype(bool)
+                            if pred.sum() == 0:
+                                return 1.0
+                            gt_dilated = dilation(gt.astype(np.uint8), disk(dilation_px)).astype(bool)
+                            return (pred & gt_dilated).sum() / pred.sum()
+
+                            
+                        bd = compute_containment_boundary(pred_mask, gt_mask)
                         rows.append({"frame": frame_idx, "file": fname, "boundary_dice": bd})
                     if rows:
                         mean_bd = sum(r["boundary_dice"] for r in rows) / len(rows)
